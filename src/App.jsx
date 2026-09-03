@@ -222,10 +222,33 @@ export default function App() {
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setDrag({ kind: 'pan', startX: event.clientX, startY: event.clientY, originX: viewport.x, originY: viewport.y });
   };
+  const startRelationDrag = (event, geometry) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDrag({
+      kind: 'relation',
+      tableId: geometry.source.id,
+      columnId: geometry.column.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      perpendicularX: geometry.perpendicularX,
+      perpendicularY: geometry.perpendicularY,
+      originOffset: Number(geometry.column.relationOffset) || 0,
+    });
+  };
   const moveDrag = (event) => {
     if (!drag) return;
     if (drag.kind === 'pan') {
       setViewport((current) => ({ ...current, x: drag.originX + event.clientX - drag.startX, y: drag.originY + event.clientY - drag.startY }));
+      return;
+    }
+    if (drag.kind === 'relation') {
+      const deltaX = (event.clientX - drag.startX) / viewport.zoom;
+      const deltaY = (event.clientY - drag.startY) / viewport.zoom;
+      const projectedOffset = deltaX * drag.perpendicularX + deltaY * drag.perpendicularY;
+      updateColumnInTable(drag.tableId, drag.columnId, { relationOffset: drag.originOffset + projectedOffset });
       return;
     }
     const rect = canvasRef.current.getBoundingClientRect();
@@ -366,7 +389,8 @@ export default function App() {
     const groupKey = [source.id, target.id].sort().join('::');
     const siblings = relationGroups.get(groupKey);
     const siblingIndex = siblings.indexOf(entry);
-    const parallelOffset = (siblingIndex - (siblings.length - 1) / 2) * 28;
+    const automaticOffset = (siblingIndex - (siblings.length - 1) / 2) * 28;
+    const parallelOffset = automaticOffset + (Number(column.relationOffset) || 0);
     const sourceCenter = cardCenter(source);
     const targetCenter = cardCenter(target);
     const start = shiftAlongTableEdge(source, pointOnTableEdge(source, targetCenter), parallelOffset);
@@ -381,15 +405,20 @@ export default function App() {
     const labelX2 = end.x - unitX * 18 + perpendicularX * 10;
     const labelY2 = end.y - unitY * 18 + perpendicularY * 10;
     const controlX = (start.x + end.x) / 2;
-    return { source, column, start, end, controlX, labelX1, labelY1, labelX2, labelY2 };
+    return { source, column, start, end, controlX, labelX1, labelY1, labelX2, labelY2, perpendicularX, perpendicularY };
   });
-  const relations = relationGeometry.map(({ source, column, start, end, controlX, labelX1, labelY1, labelX2, labelY2 }) => <g key={`${source.id}-${column.id}`} style={{ '--line': source.color }}>
-    <path d={`M${start.x},${start.y} C${controlX},${start.y} ${controlX},${end.y} ${end.x},${end.y}`} className="relation" />
+  const relations = relationGeometry.map((geometry) => {
+    const { source, column, start, end, controlX, labelX1, labelY1, labelX2, labelY2 } = geometry;
+    const path = `M${start.x},${start.y} C${controlX},${start.y} ${controlX},${end.y} ${end.x},${end.y}`;
+    return <g key={`${source.id}-${column.id}`} style={{ '--line': source.color }}>
+    <path d={path} className="relation-hit" onPointerDown={(event) => startRelationDrag(event, geometry)} onDoubleClick={(event) => { event.stopPropagation(); updateColumnInTable(source.id, column.id, { relationOffset: 0 }); setNotice('Position automatique restaurée'); }} />
+    <path d={path} className="relation" />
     <circle cx={start.x} cy={start.y} r="3" className="relation-endpoint" />
     <circle cx={end.x} cy={end.y} r="3" className="relation-endpoint" />
     <text x={labelX1} y={labelY1} className="multiplicity">{column.sourceMultiplicity || '*'}</text>
     <text x={labelX2} y={labelY2} className="multiplicity">{column.targetMultiplicity || '1'}</text>
-  </g>);
+  </g>;
+  });
 
   const exportSvg = () => {
     const escapeXml = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
